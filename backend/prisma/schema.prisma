@@ -1,13 +1,127 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// Onlysaint POS — Database Schema
+// Docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
+  engineType = "library"
 }
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+/// Peran pengguna dalam sistem
+enum Role {
+  ADMIN
+  KASIR
+}
+
+/// Status siklus hidup sebuah order
+enum OrderStatus {
+  PENDING   // Order baru dibuat, belum dibayar
+  PAID      // Pembayaran berhasil
+  PREPARING // Sedang disiapkan
+  DONE      // Selesai / diambil pelanggan
+}
+
+/// Metode pembayaran yang didukung
+enum PaymentMethod {
+  CASH
+  QRIS
+}
+
+// ============================================================
+// MODELS
+// ============================================================
+
+/// Pengguna sistem (Admin atau Kasir)
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(KASIR)
+
+  orders    Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+/// Kategori produk (misal: Makanan, Minuman, Snack)
+model Category {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+
+  products  Product[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@map("categories")
+}
+
+/// Produk yang dijual
+model Product {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  image       String?  // URL atau path ke gambar produk
+  price       Decimal  @db.Decimal(12, 2) // Maks Rp 9.999.999.999,99
+  stock       Int      @default(0)
+
+  categoryId  Int
+  category    Category @relation(fields: [categoryId], references: [id])
+
+  orderItems  OrderItem[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([categoryId])
+  @@map("products")
+}
+
+/// Order / transaksi penjualan
+model Order {
+  id              Int           @id @default(autoincrement())
+  orderNumber     String        @unique       // Format: ORD-20260614-0001
+  status          OrderStatus   @default(PENDING)
+  paymentMethod   PaymentMethod
+  xenditInvoiceId String?                     // ID invoice dari Xendit (untuk QRIS)
+  totalAmount     Decimal       @db.Decimal(12, 2)
+
+  userId          Int
+  user            User          @relation(fields: [userId], references: [id])
+
+  items           OrderItem[]
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@map("orders")
+}
+
+/// Item dalam sebuah order (detail produk yang dipesan)
+model OrderItem {
+  id        Int     @id @default(autoincrement())
+  quantity  Int
+  price     Decimal @db.Decimal(12, 2) // Harga snapshot saat transaksi
+
+  orderId   Int
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
 }
