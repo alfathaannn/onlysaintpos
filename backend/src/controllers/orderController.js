@@ -3,9 +3,7 @@ const { Xendit } = require('xendit-node');
 const axios = require('axios');
 const pusher = require('../utils/pusher');
 
-// Inisialisasi Xendit Client
-const xenditClient = new Xendit({ secretKey: process.env.XENDIT_SECRET_KEY || 'dummy_key' });
-const { QrCode } = xenditClient;
+// (SDK tidak dipakai untuk pembuatan QRIS karena xendit-node v7 telah mengubah struktur API-nya)
 
 // [POST] /api/orders
 const createOrder = async (req, res, next) => {
@@ -98,27 +96,47 @@ const createOrder = async (req, res, next) => {
     let qrString = null;
     if (paymentMethod === 'QRIS') {
       try {
-        const qrResponse = await QrCode.createQRCode({
-          data: {
-            referenceId: orderNumber,
+        // Kita gunakan axios langsung untuk menghindari masalah beda versi xendit-node SDK
+        const encodedKey = Buffer.from(process.env.XENDIT_SECRET_KEY + ':').toString('base64');
+        
+        const qrResponse = await axios.post(
+          'https://api.xendit.co/qr_codes',
+          {
+            reference_id: orderNumber,
             type: 'DYNAMIC',
             currency: 'IDR',
             amount: totalAmount
+          },
+          {
+            headers: {
+              'Authorization': `Basic ${encodedKey}`,
+              'api-version': '2022-07-31',
+              'Content-Type': 'application/json'
+            }
           }
-        });
+        );
 
         // Simpan xenditInvoiceId (di sini kita pakai ID QR Code) ke database
         newOrder = await prisma.order.update({
           where: { id: newOrder.id },
-          data: { xenditInvoiceId: qrResponse.id },
+          data: { xenditInvoiceId: qrResponse.data.id },
           include: { items: true, user: { select: { name: true } } }
         });
 
-        qrString = qrResponse.qrString; // Ini yang akan dirender jadi gambar QR di frontend
-      } catch (xenditError) {
-        console.error('Xendit Error:', xenditError);
+        qrString = qrResponse.data.qr_string; // Ini yang akan dirender jadi gambar QR di frontend
+
+        // Pancarkan event ke Pusher agar Customer Display otomatis menampilkan QR
+        pusher.trigger('pos-channel', 'show-qris', {
+          orderNumber: newOrder.orderNumber,
+          totalAmount: Number(newOrder.totalAmount),
+          qrString: qrString,
+          timestamp: new Date().toISOString()
+        }).catch(err => console.error('Pusher Error (Show QRIS):', err));
+
+      } catch (error) {
+        console.error('QR/Pusher Error:', error.response?.data || error);
         res.status(500);
-        throw new Error('Gagal membuat QRIS Xendit. Pastikan API Key valid.');
+        throw new Error(error.response?.data?.message || error.message || 'Gagal membuat QRIS.');
       }
     }
 
